@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# Dependencies / builds
+node_modules/
+vendor/
+dist/
+
+# Env / secrets
+.env
+.env.*
+*.log
