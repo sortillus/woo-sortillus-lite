@@ -63,4 +63,18 @@ foreach ( $forbidden_markers as $marker ) {
 	}
 }
 
+$widget_js = file_get_contents( $root . '/assets/widget.js' );
+$widget_markers = array(
+	'widget.setAttribute("theme", "woocommerce")',
+	'widget.setAttribute("placement", target ? "header_search" : "floating")',
+	'widget.setAttribute("desktop-selector", config.desktopSelector)',
+	'widget.setAttribute("mobile-selector", config.mobileSelector)',
+);
+foreach ( $widget_markers as $marker ) {
+	if ( false === strpos( $widget_js, $marker ) ) {
+		fwrite( STDERR, "Missing assistant placement marker: {$marker}\n" );
+		exit( 1 );
+	}
+}
+
 echo "Sortillus Lite package test passed.\n";

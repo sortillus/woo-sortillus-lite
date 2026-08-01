@@ -8,7 +8,7 @@ Minimal WooCommerce connector for Sortillus.
 - Import all published WooCommerce product parents in background batches.
 - Display store-level import progress and Sortillus connector health.
 - Send a product offer after WooCommerce product creation, update, or stock-status changes.
-- Optionally load the hosted Sortillus Shop Assistant widget; disabled by default.
+- Optionally load the hosted Sortillus Shop Assistant widget; disabled by default. The plugin places its launcher next to a recognized header product-search form and falls back to a floating button when no search form is available.
 
 The plugin intentionally does not include taxonomy synchronization, inbound callbacks, recommendations, semantic-search replacement, order export, or per-product sync metadata.
 
@@ -26,3 +26,4 @@ The connector uses `https://data.sortillus.com` for API requests and loads the s
 
 The full Woo Sortillus plugin and the lite plugin must not be active together.
 
+Themes with custom header markup can override the detected search element with the `woo_sortillus_lite_assistant_desktop_selector` and `woo_sortillus_lite_assistant_mobile_selector` filters.

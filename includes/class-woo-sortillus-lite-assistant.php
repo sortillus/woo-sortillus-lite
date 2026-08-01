@@ -34,6 +34,26 @@ final class Woo_Sortillus_Lite_Assistant {
 		if ( ! $this->settings->is_connected() || ! $this->settings->assistant_enabled() ) {
 			return;
 		}
+		$search_selector = implode(
+			', ',
+			array(
+				'header form.woocommerce-product-search',
+				'.site-header form.woocommerce-product-search',
+				'header .wp-block-woocommerce-product-search',
+				'.site-header .wp-block-woocommerce-product-search',
+				'header .wp-block-search',
+				'.site-header .wp-block-search',
+				'form.woocommerce-product-search',
+			)
+		);
+		$desktop_selector = (string) apply_filters(
+			'woo_sortillus_lite_assistant_desktop_selector',
+			$search_selector
+		);
+		$mobile_selector = (string) apply_filters(
+			'woo_sortillus_lite_assistant_mobile_selector',
+			$desktop_selector
+		);
 		wp_enqueue_script( 'sortillus-shop-assistant', WOO_SORTILLUS_LITE_WIDGET_URL, array(), null, true );
 		wp_enqueue_script(
 			'woo-sortillus-lite-widget',
@@ -46,9 +66,11 @@ final class Woo_Sortillus_Lite_Assistant {
 			'woo-sortillus-lite-widget',
 			'wooSortillusLiteWidget',
 			array(
-				'apiOrigin'   => WOO_SORTILLUS_LITE_API_ORIGIN,
-				'bootstrapUrl' => rest_url( 'sortillus-lite/v1/shop-assistant/session' ),
-				'locale'       => str_replace( '_', '-', determine_locale() ),
+				'apiOrigin'       => WOO_SORTILLUS_LITE_API_ORIGIN,
+				'bootstrapUrl'    => rest_url( 'sortillus-lite/v1/shop-assistant/session' ),
+				'locale'          => str_replace( '_', '-', determine_locale() ),
+				'desktopSelector' => $desktop_selector,
+				'mobileSelector'  => $mobile_selector,
 			)
 		);
 	}
@@ -121,4 +143,3 @@ final class Woo_Sortillus_Lite_Assistant {
 		return true;
 	}
 }
-
