@@ -76,7 +76,8 @@ final class Woo_Sortillus_Lite_Sync {
 			$this->settings->set_sync_state( $state );
 		}
 
-		$action_id = $this->schedule_import( $run_id, 0, 0, $this->batch_key( $run_id, 0 ), 0 );
+		// Unique is OK here: nothing with this hook/group should be running yet.
+		$action_id = $this->schedule_import( $run_id, 0, 0, $this->batch_key( $run_id, 0 ), 0, true );
 		if ( ! $action_id || is_wp_error( $action_id ) ) {
 			$state['status']      = 'failed';
 			$state['finished_at'] = gmdate( 'c' );
@@ -103,12 +104,14 @@ final class Woo_Sortillus_Lite_Sync {
 			return;
 		}
 		set_transient( $lock_key, '1', HOUR_IN_SECONDS );
+		// Do not use unique=true: AS uniqueness is hook+group only, so one in-flight
+		// delta would block every other product update.
 		$action_id = as_schedule_single_action(
 			time() + 5,
 			self::DELTA_HOOK,
 			array( $product_id, 0, wp_generate_uuid4() ),
 			self::GROUP,
-			true
+			false
 		);
 		if ( ! $action_id || is_wp_error( $action_id ) ) {
 			delete_transient( $lock_key );
@@ -143,7 +146,8 @@ final class Woo_Sortillus_Lite_Sync {
 		$result = empty( $offers ) ? array() : $this->client->send_offers( $offers, $idempotency_key );
 		if ( is_wp_error( $result ) && $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT ) {
 			$delay = $this->retry_delay( $result, (int) $attempt );
-			$action_id = $this->schedule_import( $run_id, $cursor, (int) $attempt + 1, $idempotency_key, $delay );
+			// Must not be unique: this action is still running, and AS unique = hook+group.
+			$action_id = $this->schedule_import( $run_id, $cursor, (int) $attempt + 1, $idempotency_key, $delay, false );
 			if ( $action_id && ! is_wp_error( $action_id ) ) {
 				return;
 			}
@@ -163,12 +167,15 @@ final class Woo_Sortillus_Lite_Sync {
 		$state['errors'] = array_slice( array_values( array_unique( $state['errors'] ) ), -10 );
 		$this->settings->set_sync_state( $state );
 
+		// Must not be unique while this batch action is still in-progress: Action Scheduler
+		// treats unique as hook+group only, so unique=true returns 0 and aborts the import.
 		$action_id = $this->schedule_import(
 			$run_id,
 			$state['cursor'],
 			0,
 			$this->batch_key( $run_id, $state['cursor'] ),
-			1
+			1,
+			false
 		);
 		if ( ! $action_id || is_wp_error( $action_id ) ) {
 			$remaining             = max( 0, (int) $state['total'] - (int) $state['processed'] );
@@ -198,7 +205,7 @@ final class Woo_Sortillus_Lite_Sync {
 				self::DELTA_HOOK,
 				array( $product_id, (int) $attempt + 1, $idempotency_key ),
 				self::GROUP,
-				true
+				false
 			);
 			if ( $action_id && ! is_wp_error( $action_id ) ) {
 				return;
@@ -288,13 +295,13 @@ final class Woo_Sortillus_Lite_Sync {
 		return array_map( 'intval', (array) $wpdb->get_col( $sql ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 	}
 
-	private function schedule_import( $run_id, $cursor, $attempt, $idempotency_key, $delay ) {
+	private function schedule_import( $run_id, $cursor, $attempt, $idempotency_key, $delay, $unique = false ) {
 		return as_schedule_single_action(
 			time() + max( 0, (int) $delay ),
 			self::IMPORT_HOOK,
 			array( $run_id, (int) $cursor, (int) $attempt, $idempotency_key ),
 			self::GROUP,
-			true
+			(bool) $unique
 		);
 	}
 
