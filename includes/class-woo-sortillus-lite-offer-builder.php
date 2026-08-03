@@ -49,7 +49,7 @@ final class Woo_Sortillus_Lite_Offer_Builder {
 			'last_modified_at'    => get_post_modified_time( 'c', true, $product_id ),
 		);
 
-		$image = wp_get_attachment_image_url( $product->get_image_id(), 'full' );
+		$image = $this->primary_image_url( $product );
 		if ( $image ) {
 			$offer['image']            = $image;
 			$offer['seller_image_url'] = $image;
@@ -115,6 +115,32 @@ final class Woo_Sortillus_Lite_Offer_Builder {
 		}
 		$value = get_post_meta( $product->get_id(), '_brand', true );
 		return is_string( $value ) ? trim( $value ) : '';
+	}
+
+	private function primary_image_url( $product ) {
+		$attachment_url = wp_get_attachment_image_url( $product->get_image_id(), 'full' );
+		$url            = is_string( $attachment_url ) ? $attachment_url : '';
+
+		if ( '' === $url ) {
+			foreach ( array( 'fifu_image_url', '_external_image_url', 'external_image_url', '_product_image_url', '_thumbnail_ext_url' ) as $key ) {
+				$value = get_post_meta( $product->get_id(), $key, true );
+				$url   = $this->sanitize_image_url( $value );
+				if ( '' !== $url ) {
+					break;
+				}
+			}
+		}
+
+		$url = apply_filters( 'woo_sortillus_lite_product_image_url', $url, $product );
+		return $this->sanitize_image_url( $url );
+	}
+
+	private function sanitize_image_url( $value ) {
+		if ( ! is_string( $value ) ) {
+			return '';
+		}
+		$url = esc_url_raw( trim( $value ), array( 'http', 'https' ) );
+		return is_string( $url ) ? $url : '';
 	}
 
 	private function images( $product ) {

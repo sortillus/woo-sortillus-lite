@@ -3,6 +3,7 @@
 define( 'ABSPATH', __DIR__ );
 
 $test_product = null;
+$test_post_meta = array();
 
 function absint( $value ) { return abs( (int) $value ); }
 function wc_get_product( $product_id ) { global $test_product; return $test_product; }
@@ -14,7 +15,31 @@ function get_post_modified_time() { return '2026-08-01T10:00:00+00:00'; }
 function get_option( $key, $default = '' ) { return $default; }
 function get_the_terms() { return array(); }
 function wp_strip_all_tags( $value ) { return strip_tags( $value ); }
-function get_post_meta() { return ''; }
+function get_post_meta( $post_id, $key = '', $single = false ) {
+	global $test_post_meta;
+	if ( ! isset( $test_post_meta[ (int) $post_id ][ $key ] ) ) {
+		return $single ? '' : array();
+	}
+	$value = $test_post_meta[ (int) $post_id ][ $key ];
+	return $single ? $value : array( $value );
+}
+function esc_url_raw( $url, $protocols = null ) {
+	$url = trim( (string) $url );
+	if ( '' === $url ) {
+		return '';
+	}
+	if ( is_array( $protocols ) ) {
+		$scheme = strtolower( (string) parse_url( $url, PHP_URL_SCHEME ) );
+		if ( ! in_array( $scheme, $protocols, true ) ) {
+			return '';
+		}
+	}
+	return $url;
+}
+function apply_filters( $hook, $value ) {
+	$args = func_get_args();
+	return $args[1];
+}
 function wc_get_product_terms() { return array(); }
 function wc_attribute_label( $name ) { return $name; }
 
@@ -25,6 +50,7 @@ final class Fake_Woo_Product {
 	public $stock_status = 'instock';
 	public $in_stock = true;
 	public $backorders = 'no';
+	public $image_id = 9;
 
 	public function get_id() { return 42; }
 	public function get_type() { return $this->type; }
@@ -41,7 +67,7 @@ final class Fake_Woo_Product {
 	public function get_stock_quantity() { return 7; }
 	public function is_virtual() { return false; }
 	public function is_downloadable() { return false; }
-	public function get_image_id() { return 9; }
+	public function get_image_id() { return $this->image_id; }
 	public function get_gallery_image_ids() { return array( 10 ); }
 	public function get_sku() { return 'SKU-42'; }
 	public function get_regular_price() { return $this->regular_price; }
@@ -71,6 +97,8 @@ assert_same( true, $offer['available'], 'In-stock product must be available' );
 assert_same( 2, $offer['availability'], 'In-stock availability code must be 2' );
 assert_same( 'SKU-42', $offer['sku'], 'SKU must be mapped' );
 assert_same( 'Example Brand', $offer['brand'], 'Brand must be mapped' );
+assert_same( 'https://shop.example/image-9.jpg', $offer['image'], 'Attachment image must be preferred' );
+assert_same( 'https://shop.example/image-9.jpg', $offer['seller_image_url'], 'Attachment seller image must be preferred' );
 
 $test_product->type         = 'variable';
 $test_product->price        = '';
@@ -92,5 +120,16 @@ $offer                      = $builder->build( 42 );
 assert_same( false, $offer['available'], 'Out-of-stock product must be unavailable' );
 assert_same( 0, $offer['availability'], 'Out-of-stock availability code must be 0' );
 
-echo "Sortillus Lite offer builder test passed.\n";
+$test_product->image_id = 0;
+$test_product->stock_status = 'instock';
+$test_product->in_stock     = true;
+$test_post_meta             = array(
+	42 => array(
+		'fifu_image_url' => 'https://cdn.example/external-product.jpg',
+	),
+);
+$offer = $builder->build( 42 );
+assert_same( 'https://cdn.example/external-product.jpg', $offer['image'], 'External image meta must fill image when no attachment exists' );
+assert_same( 'https://cdn.example/external-product.jpg', $offer['seller_image_url'], 'External image meta must fill seller_image_url when no attachment exists' );
 
+echo "Sortillus Lite offer builder test passed.\n";
