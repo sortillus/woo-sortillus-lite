@@ -24,6 +24,7 @@ final class Woo_Sortillus_Lite_Admin {
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'admin_post_woo_sortillus_lite_activate', array( $this, 'activate' ) );
 		add_action( 'admin_post_woo_sortillus_lite_save_assistant', array( $this, 'save_assistant' ) );
+		add_action( 'wp_ajax_woo_sortillus_lite_import_categories', array( $this, 'import_categories' ) );
 		add_action( 'wp_ajax_woo_sortillus_lite_start_import', array( $this, 'start_import' ) );
 		add_action( 'wp_ajax_woo_sortillus_lite_sync_status', array( $this, 'sync_status' ) );
 	}
@@ -58,6 +59,10 @@ final class Woo_Sortillus_Lite_Admin {
 				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 				'nonce'   => wp_create_nonce( 'woo_sortillus_lite_sync' ),
 				'i18n'    => array(
+					'categoriesFirst' => __( 'Import categories first to enable product import.', 'woo-sortillus-lite' ),
+					'categoriesDone' => __( 'Categories imported. You can now import products.', 'woo-sortillus-lite' ),
+					'categories' => __( 'categories imported', 'woo-sortillus-lite' ),
+					'importCategories' => __( 'Import Categories', 'woo-sortillus-lite' ),
 					'never'       => __( 'Products have not been imported yet.', 'woo-sortillus-lite' ),
 					'starting'    => __( 'Starting import…', 'woo-sortillus-lite' ),
 					'failed'      => __( 'Could not start the import.', 'woo-sortillus-lite' ),
@@ -110,12 +115,27 @@ final class Woo_Sortillus_Lite_Admin {
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
 		}
-		wp_send_json_success( array( 'state' => $result ) );
+		wp_send_json_success( array( 'state' => $result, 'category_state' => $this->category_status() ) );
+	}
+
+	public function import_categories() {
+		$this->authorize_ajax();
+		$result = $this->sync->start_category_import();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( array( 'state' => $this->settings->get_sync_state(), 'category_state' => $this->category_status() ) );
+	}
+
+	private function category_status() {
+		$state = $this->settings->get_category_state();
+		unset( $state['term_ids'] );
+		return $state;
 	}
 
 	public function sync_status() {
 		$this->authorize_ajax();
-		$payload = array( 'state' => $this->settings->get_sync_state() );
+		$payload = array( 'state' => $this->settings->get_sync_state(), 'category_state' => $this->category_status() );
 		if ( ! empty( $_POST['include_health'] ) && $this->settings->is_connected() ) {
 			$health = $this->client->health();
 			if ( is_wp_error( $health ) ) {
@@ -157,6 +177,12 @@ final class Woo_Sortillus_Lite_Admin {
 
 			<?php if ( $connected ) : ?>
 				<div class="woo-sortillus-lite-card">
+					<h2><?php esc_html_e( 'Category Import', 'woo-sortillus-lite' ); ?></h2>
+					<p id="woo-sortillus-lite-category-status" aria-live="polite"></p>
+					<p id="woo-sortillus-lite-category-error" class="woo-sortillus-lite-error" role="alert"></p>
+					<button id="woo-sortillus-lite-import-categories" class="button button-primary" type="button"><?php esc_html_e( 'Import Categories', 'woo-sortillus-lite' ); ?></button>
+				</div>
+				<div class="woo-sortillus-lite-card">
 					<h2><?php esc_html_e( 'Product Sync Status', 'woo-sortillus-lite' ); ?></h2>
 					<p><strong><?php esc_html_e( 'State:', 'woo-sortillus-lite' ); ?></strong> <span id="woo-sortillus-lite-state"><?php echo esc_html( $state['status'] ?? 'idle' ); ?></span></p>
 					<div class="woo-sortillus-lite-progress"><span id="woo-sortillus-lite-progress-bar"></span></div>
@@ -164,7 +190,7 @@ final class Woo_Sortillus_Lite_Admin {
 					<p id="woo-sortillus-lite-sync-details"></p>
 					<p id="woo-sortillus-lite-sync-error" class="woo-sortillus-lite-error"></p>
 					<p id="woo-sortillus-lite-health"></p>
-					<button id="woo-sortillus-lite-import" class="button button-primary" type="button"><?php esc_html_e( 'Import Products', 'woo-sortillus-lite' ); ?></button>
+					<button id="woo-sortillus-lite-import" class="button button-primary" type="button" <?php if ( ! $this->settings->categories_imported() ) : ?>hidden<?php endif; ?>><?php esc_html_e( 'Import Products', 'woo-sortillus-lite' ); ?></button>
 				</div>
 
 				<div class="woo-sortillus-lite-card">
@@ -185,6 +211,7 @@ final class Woo_Sortillus_Lite_Admin {
 			.woo-sortillus-lite-card{background:#fff;border:1px solid #c3c4c7;box-shadow:0 1px 1px rgba(0,0,0,.04);margin:18px 0;max-width:760px;padding:20px}
 			.woo-sortillus-lite-progress{background:#dcdcde;border-radius:5px;height:10px;max-width:520px;overflow:hidden}
 			.woo-sortillus-lite-progress span{background:#2271b1;display:block;height:100%;transition:width .2s;width:0}
+			.woo-sortillus-lite-card [hidden]{display:none!important}
 			.woo-sortillus-lite-error{color:#b32d2e}
 		</style>
 		<?php

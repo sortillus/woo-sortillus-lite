@@ -22,7 +22,7 @@ final class Woo_Sortillus_Lite_Client {
 			'variant'          => 'lite',
 			'production'       => ! in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ),
 			'terms_accepted'   => true,
-			'scopes'           => array( 'offers:write', 'integration:read', 'integration:write', 'chat:write' ),
+			'scopes'           => array( 'taxonomy:write', 'offers:write', 'integration:read', 'integration:write', 'chat:write' ),
 			'metadata'         => array(
 				'wordpress_version'   => get_bloginfo( 'version' ),
 				'woocommerce_version' => defined( 'WC_VERSION' ) ? WC_VERSION : '',
@@ -36,6 +36,27 @@ final class Woo_Sortillus_Lite_Client {
 			null,
 			45
 		);
+	}
+
+	public function send_categories( array $categories, $idempotency_key ) {
+		$endpoint = $this->settings->endpoint(
+			Woo_Sortillus_Lite_Settings::OPTION_CATEGORIES_ENDPOINT,
+			'api/v3/shop/categories/batch'
+		);
+		$result = $this->request( 'POST', $endpoint, array( 'categories' => array_values( $categories ) ), $idempotency_key, 90 );
+		if ( is_wp_error( $result ) ) {
+			$data = $result->get_error_data();
+			if ( 'taxonomy:write' === ( $data['required_scope'] ?? '' ) ) {
+				return new WP_Error( 'taxonomy_scope', __( 'Reconnect with a new activation token to enable category import.', 'woo-sortillus-lite' ) );
+			}
+			return $result;
+		}
+		if ( ! empty( $result['errors'] ) || ! isset( $result['meta']['saved_count'], $result['meta']['error_count'] ) ||
+			(int) $result['meta']['saved_count'] !== count( $categories ) || (int) $result['meta']['error_count'] !== 0 ) {
+			$message = $result['errors'][0]['error'] ?? __( 'Sortillus did not confirm that every category was saved. Retry category import.', 'woo-sortillus-lite' );
+			return new WP_Error( 'category_import_failed', is_string( $message ) ? $message : wp_json_encode( $message ) );
+		}
+		return $result;
 	}
 
 	public function send_offer( array $offer, $idempotency_key ) {
@@ -133,6 +154,7 @@ final class Woo_Sortillus_Lite_Client {
 				'sortillus_http_error',
 				(string) $message,
 				array(
+					'required_scope' => is_array( $data ) ? ( $data['required_scope'] ?? null ) : null,
 					'status'      => $status,
 					'retryable'   => in_array( $status, array( 408, 425, 429 ), true ) || $status >= 500,
 					'retry_after' => $retry_after,

@@ -3,7 +3,7 @@
  * Plugin Name: Sortillus Lite for WooCommerce
  * Plugin URI: https://sortillus.com
  * Description: Connects WooCommerce to Sortillus, imports product offers, and adds the hosted shopping assistant.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Sortillus
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WOO_SORTILLUS_LITE_VERSION', '1.0.0' );
+define( 'WOO_SORTILLUS_LITE_VERSION', '1.1.0' );
 define( 'WOO_SORTILLUS_LITE_FILE', __FILE__ );
 define( 'WOO_SORTILLUS_LITE_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WOO_SORTILLUS_LITE_URL', plugin_dir_url( __FILE__ ) );

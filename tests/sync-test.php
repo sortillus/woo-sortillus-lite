@@ -39,12 +39,19 @@ function add_action() {}
 
 final class Woo_Sortillus_Lite_Settings {
 	public $state = array();
+	public $category_state = array( 'status' => 'succeeded' );
+	public function get_category_state() { return $this->category_state; }
+	public function set_category_state( array $state ) { $this->category_state = $state; }
+	public function categories_imported() { return 'succeeded' === ( $this->category_state['status'] ?? '' ); }
 	public function is_connected() { return true; }
 	public function get_sync_state() { return $this->state; }
 	public function set_sync_state( array $state ) { $this->state = $state; }
 }
 
 final class Woo_Sortillus_Lite_Client {
+	public $category_batches = array();
+	public $category_result = array();
+	public function send_categories( array $categories, $key ) { $this->category_batches[] = array( $categories, $key ); return $this->category_result; }
 	public $reports = array();
 	public $batches = array();
 	public $deltas = array();
@@ -129,3 +136,59 @@ assert_sync( $retry_first[3] === $scheduled_actions[1]['args'][3], 'Retries must
 assert_sync( 0 === $retry_settings->state['processed'], 'A retry must not advance import progress before delivery.' );
 
 echo "Sortillus Lite sync lifecycle test passed.\n";
+
+$category_terms = array(
+	2 => (object) array( 'term_id' => 2, 'parent' => 1, 'name' => 'Child', 'description' => '' ),
+	1 => (object) array( 'term_id' => 1, 'parent' => 0, 'name' => 'Root', 'description' => '' ),
+);
+function get_terms( $args ) { global $category_terms; assert_sync( false === $args['hide_empty'], 'Empty categories must be included.' ); return array_values( $category_terms ); }
+function get_term( $id, $taxonomy ) { global $category_terms; return $category_terms[$id] ?? null; }
+function get_locale() { return 'hr_HR'; }
+
+$unique_hooks_in_flight = array();
+$cat_settings = new Woo_Sortillus_Lite_Settings();
+$cat_settings->category_state = array();
+$cat_client = new Woo_Sortillus_Lite_Client();
+$cat_sync = new Woo_Sortillus_Lite_Sync( $cat_settings, $cat_client, $builder );
+assert_sync( is_wp_error( $cat_sync->start_import() ), 'Products must be blocked before category import.' );
+$cat_state = $cat_sync->start_category_import();
+assert_sync( array(1, 2) === $cat_state['term_ids'], 'Category import must order parents before children.' );
+assert_sync( ! $cat_settings->categories_imported(), 'Queued categories must not unlock products.' );
+$cat_client->category_result = new WP_Error( 'partial', 'A category failed' );
+$cat_sync->run_category_batch( $cat_state['run_id'] );
+assert_sync( 'failed' === $cat_settings->category_state['status'], 'Partial category failure must fail the import.' );
+assert_sync( is_wp_error( $cat_sync->start_import() ), 'Failed categories must not unlock products.' );
+$cat_client->category_result = array();
+$cat_state = $cat_sync->start_category_import();
+$cat_sync->run_category_batch( $cat_state['run_id'] );
+assert_sync( $cat_settings->categories_imported(), 'Confirmed category import must unlock products.' );
+assert_sync( 2 === $cat_settings->category_state['processed'], 'All confirmed categories must count.' );
+assert_sync( 0 === $cat_client->category_batches[0][0][0]['external_parent_id'], 'Root must send zero parent.' );
+assert_sync( 1 === $cat_client->category_batches[0][0][1]['external_parent_id'], 'Child must send API external_parent_id.' );
+assert_sync( ! is_wp_error( $cat_sync->start_import() ), 'Product import must work after category success.' );
+
+// A hierarchy larger than one batch must retain ordering and retry without advancing.
+$category_terms = array();
+for ( $i = 105; $i > 0; --$i ) {
+	$category_terms[$i] = (object) array( 'term_id' => $i, 'parent' => $i - 1, 'name' => 'Category ' . $i, 'description' => '' );
+}
+$cat_settings->state = array();
+$cat_state = $cat_sync->start_category_import();
+$cat_client->category_result = new WP_Error( 'temporary', 'Retry', array( 'retryable' => true ) );
+$cat_sync->run_category_batch( $cat_state['run_id'] );
+assert_sync( 0 === $cat_settings->category_state['processed'], 'Retry must not advance category progress.' );
+$retry_key = end( $cat_client->category_batches )[1];
+$cat_client->category_result = array();
+$cat_sync->run_category_batch( $cat_state['run_id'], 1 );
+assert_sync( $retry_key === end( $cat_client->category_batches )[1], 'Category retry must preserve idempotency key.' );
+assert_sync( 100 === $cat_settings->category_state['processed'], 'Categories must be batched.' );
+assert_sync( ! $cat_settings->categories_imported(), 'Products must stay blocked between batches.' );
+$cat_sync->run_category_batch( $cat_state['run_id'] );
+assert_sync( $cat_settings->categories_imported(), 'Final batch must unlock products.' );
+assert_sync( 100 === end( $cat_client->category_batches )[0][0]['external_parent_id'], 'Second batch must reference a parent saved in the first batch.' );
+$cat_sync->run_category_batch( $cat_state['run_id'] );
+assert_sync( 105 === $cat_settings->category_state['processed'], 'A stale completed action must be ignored.' );
+$category_terms = array();
+$cat_sync->start_category_import();
+assert_sync( $cat_settings->categories_imported(), 'An empty taxonomy needs no API calls and must unlock products.' );
+echo "Sortillus Lite category lifecycle test passed.\n";

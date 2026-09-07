@@ -6,6 +6,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class Woo_Sortillus_Lite_Sync {
 	const GROUP           = 'woo-sortillus-lite';
+	const CATEGORY_HOOK   = 'woo_sortillus_lite_category_batch';
 	const IMPORT_HOOK     = 'woo_sortillus_lite_import_batch';
 	const DELTA_HOOK      = 'woo_sortillus_lite_send_product';
 	const BATCH_SIZE      = 100;
@@ -29,6 +30,7 @@ final class Woo_Sortillus_Lite_Sync {
 		add_action( 'woocommerce_new_product', array( $this, 'queue_product' ), 20, 1 );
 		add_action( 'woocommerce_update_product', array( $this, 'queue_product' ), 20, 1 );
 		add_action( 'woocommerce_product_set_stock_status', array( $this, 'queue_product' ), 20, 1 );
+		add_action( self::CATEGORY_HOOK, array( $this, 'run_category_batch' ), 10, 2 );
 		add_action( self::IMPORT_HOOK, array( $this, 'run_import_batch' ), 10, 4 );
 		add_action( self::DELTA_HOOK, array( $this, 'run_product_delta' ), 10, 3 );
 	}
@@ -39,6 +41,10 @@ final class Woo_Sortillus_Lite_Sync {
 		}
 		if ( ! function_exists( 'as_schedule_single_action' ) ) {
 			return new WP_Error( 'scheduler_missing', __( 'WooCommerce Action Scheduler is unavailable.', 'woo-sortillus-lite' ) );
+		}
+
+		if ( ! $this->settings->categories_imported() ) {
+			return new WP_Error( 'categories_required', __( 'Import categories successfully before importing products.', 'woo-sortillus-lite' ) );
 		}
 
 		$current = $this->settings->get_sync_state();
@@ -88,6 +94,114 @@ final class Woo_Sortillus_Lite_Sync {
 			return new WP_Error( 'schedule_failed', $state['last_error'] );
 		}
 		return $state;
+	}
+
+	public function start_category_import() {
+		if ( ! $this->settings->is_connected() ) {
+			return new WP_Error( 'not_connected', __( 'Connect to Sortillus before importing categories.', 'woo-sortillus-lite' ) );
+		}
+		if ( ! function_exists( 'as_schedule_single_action' ) ) {
+			return new WP_Error( 'scheduler_missing', __( 'WooCommerce Action Scheduler is unavailable.', 'woo-sortillus-lite' ) );
+		}
+		foreach ( array( $this->settings->get_category_state(), $this->settings->get_sync_state() ) as $current ) {
+			if ( in_array( $current['status'] ?? '', array( 'queued', 'running' ), true ) ) {
+				return new WP_Error( 'sync_running', __( 'An import is already running.', 'woo-sortillus-lite' ) );
+			}
+		}
+
+		$terms = get_terms( array( 'taxonomy' => 'product_cat', 'hide_empty' => false ) );
+		if ( is_wp_error( $terms ) ) {
+			return $terms;
+		}
+		// Parents must be saved before children, even across batch boundaries.
+		$pending = array();
+		foreach ( $terms as $term ) {
+			$pending[ (int) $term->term_id ] = $term;
+		}
+		$ordered = array();
+		while ( $pending ) {
+			$before = count( $pending );
+			foreach ( $pending as $id => $term ) {
+				if ( 0 === (int) $term->parent || isset( $ordered[ (int) $term->parent ] ) ) {
+					$ordered[ $id ] = $id;
+					unset( $pending[ $id ] );
+				}
+			}
+			if ( count( $pending ) === $before ) {
+				return new WP_Error( 'category_hierarchy', __( 'A category has a missing parent or a hierarchy cycle. Correct the WooCommerce categories and retry.', 'woo-sortillus-lite' ) );
+			}
+		}
+		$state = array(
+			'run_id' => wp_generate_uuid4(),
+			'status' => $ordered ? 'queued' : 'succeeded',
+			'total' => count( $ordered ),
+			'processed' => 0,
+			'term_ids' => array_values( $ordered ),
+			'last_error' => null,
+		);
+		$this->settings->set_category_state( $state );
+		if ( $ordered && ! $this->schedule_category_batch( $state, 0 ) ) {
+			return $this->fail_category_import( $state, __( 'Could not schedule category import. Retry the import.', 'woo-sortillus-lite' ) );
+		}
+		return $state;
+	}
+
+	public function run_category_batch( $run_id, $attempt = 0 ) {
+		$state = $this->settings->get_category_state();
+		if ( ( $state['run_id'] ?? '' ) !== $run_id || ! in_array( $state['status'] ?? '', array( 'queued', 'running' ), true ) ) {
+			return;
+		}
+		$state['status'] = 'running';
+		$this->settings->set_category_state( $state );
+		$ids = array_slice( $state['term_ids'], (int) $state['processed'], self::BATCH_SIZE );
+		$categories = array();
+		foreach ( $ids as $id ) {
+			$term = get_term( $id, 'product_cat' );
+			if ( ! $term || is_wp_error( $term ) ) {
+				$this->fail_category_import( $state, __( 'A category changed during import. Retry category import.', 'woo-sortillus-lite' ) );
+				return;
+			}
+			$categories[] = array(
+				'external_id' => (int) $term->term_id,
+				'external_parent_id' => (int) $term->parent,
+				'name' => $term->name,
+				'description' => $term->description,
+				'source_locale' => get_locale(),
+				'active' => true,
+			);
+		}
+		$result = $this->client->send_categories( $categories, $run_id . ':categories:' . $state['processed'] );
+		if ( is_wp_error( $result ) ) {
+			if ( $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT &&
+				$this->schedule_category_batch( $state, (int) $attempt + 1, $this->retry_delay( $result, $attempt ) ) ) {
+				return;
+			}
+			$this->fail_category_import( $state, $result->get_error_message() );
+			return;
+		}
+		$state['processed'] += count( $categories );
+		if ( $state['processed'] >= $state['total'] ) {
+			$state['status'] = 'succeeded';
+			$state['finished_at'] = gmdate( 'c' );
+			unset( $state['term_ids'] );
+		}
+		$this->settings->set_category_state( $state );
+		if ( 'succeeded' !== $state['status'] && ! $this->schedule_category_batch( $state, 0 ) ) {
+			$this->fail_category_import( $state, __( 'Could not schedule the next category batch. Retry category import.', 'woo-sortillus-lite' ) );
+		}
+	}
+
+	private function schedule_category_batch( array $state, $attempt, $delay = 1 ) {
+		$action = as_schedule_single_action( time() + $delay, self::CATEGORY_HOOK, array( $state['run_id'], $attempt ), self::GROUP, false );
+		return $action && ! is_wp_error( $action );
+	}
+
+	private function fail_category_import( array $state, $message ) {
+		$state['status'] = 'failed';
+		$state['last_error'] = $message;
+		unset( $state['term_ids'] );
+		$this->settings->set_category_state( $state );
+		return new WP_Error( 'category_import_failed', $message );
 	}
 
 	public function queue_product( $product_id ) {

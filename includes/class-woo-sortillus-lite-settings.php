@@ -9,6 +9,8 @@ final class Woo_Sortillus_Lite_Settings {
 	const OPTION_EXTERNAL_ID       = 'woo_sortillus_lite_external_id';
 	const OPTION_INSTALLATION_ID   = 'woo_sortillus_lite_installation_id';
 	const OPTION_DOMAIN_ID         = 'woo_sortillus_lite_domain_id';
+	const OPTION_CATEGORY_STATE    = 'woo_sortillus_lite_category_state';
+	const OPTION_CATEGORIES_ENDPOINT = 'woo_sortillus_lite_categories_endpoint';
 	const OPTION_OFFERS_ENDPOINT   = 'woo_sortillus_lite_offers_endpoint';
 	const OPTION_HEALTH_ENDPOINT   = 'woo_sortillus_lite_health_endpoint';
 	const OPTION_SYNCS_ENDPOINT    = 'woo_sortillus_lite_syncs_endpoint';
@@ -34,6 +36,8 @@ final class Woo_Sortillus_Lite_Settings {
 			false
 		);
 
+		$this->set_category_state( array() );
+
 		$identifiers = array(
 			self::OPTION_INSTALLATION_ID => 'installation_id',
 			self::OPTION_DOMAIN_ID       => 'domain_id',
@@ -45,6 +49,7 @@ final class Woo_Sortillus_Lite_Settings {
 		}
 
 		$endpoints = array(
+			self::OPTION_CATEGORIES_ENDPOINT => 'categories_batch_endpoint',
 			self::OPTION_OFFERS_ENDPOINT   => 'offers_endpoint',
 			self::OPTION_HEALTH_ENDPOINT   => 'health_endpoint',
 			self::OPTION_SYNCS_ENDPOINT    => 'syncs_endpoint',
@@ -77,6 +82,19 @@ final class Woo_Sortillus_Lite_Settings {
 	public function endpoint( $option, $fallback_path ) {
 		$value = (string) get_option( $option, '' );
 		return '' !== $value ? $value : trailingslashit( WOO_SORTILLUS_LITE_API_ORIGIN ) . ltrim( $fallback_path, '/' );
+	}
+
+	public function get_category_state() {
+		$state = get_option( self::OPTION_CATEGORY_STATE, array() );
+		return is_array( $state ) ? $state : array();
+	}
+
+	public function set_category_state( array $state ) {
+		update_option( self::OPTION_CATEGORY_STATE, $state, false );
+	}
+
+	public function categories_imported() {
+		return 'succeeded' === ( $this->get_category_state()['status'] ?? '' );
 	}
 
 	public function get_sync_state() {
