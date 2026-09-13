@@ -17,6 +17,8 @@ The plugin intentionally does not include automatic taxonomy change hooks, inbou
 
 The connector uses `https://data.sortillus.com` for API requests and loads the shared widget from `https://admin.sortillus.com/shop-assistant/v1/widget.js`. WooCommerce products are represented as Sortillus offers and upserted through the existing `/api/v3/offers` endpoints.
 
+API requests require HTTPS on `data.sortillus.com`, using the default HTTPS port, and do not follow redirects. Assistant session requests must originate from the configured WordPress home or site URL. Additional hostnames must be configured as the appropriate WordPress URL before using the assistant through them.
+
 ## Installation
 
 1. Copy `woo-sortillus-lite` to `wp-content/plugins/` or install a zip containing the directory.
@@ -34,4 +36,4 @@ Category import uses `POST /api/v3/shop/categories/batch` with the connector tok
 
 ## Tests
 
-Run `php tests/package-test.php`, `php tests/offer-builder-test.php`, `php tests/sync-test.php`, `php tests/category-client-test.php`, and `node tests/admin-test.js`.
+Run `php tests/package-test.php`, `php tests/offer-builder-test.php`, `php tests/sync-test.php`, `php tests/category-client-test.php`, `php tests/assistant-security-test.php`, and `node tests/admin-test.js`.

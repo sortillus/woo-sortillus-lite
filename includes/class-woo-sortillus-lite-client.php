@@ -110,6 +110,15 @@ final class Woo_Sortillus_Lite_Client {
 	}
 
 	private function request( $method, $url, $payload = null, $idempotency_key = null, $timeout = 30 ) {
+		$url = esc_url_raw( $url );
+		if ( ! $this->is_allowed_api_url( $url ) ) {
+			return new WP_Error(
+				'sortillus_invalid_endpoint',
+				__( 'Sortillus API endpoints must use HTTPS on the configured Sortillus API host. Reconnect with a new activation token.', 'woo-sortillus-lite' ),
+				array( 'retryable' => false )
+			);
+		}
+
 		$headers = array( 'Accept' => 'application/json' );
 		if ( null !== $payload ) {
 			$headers['Content-Type'] = 'application/json';
@@ -125,14 +134,15 @@ final class Woo_Sortillus_Lite_Client {
 		$args = array(
 			'method'      => $method,
 			'timeout'     => $timeout,
-			'redirection' => 2,
+			// Never forward the connector or activation token through a redirect.
+			'redirection' => 0,
 			'headers'     => $headers,
 		);
 		if ( null !== $payload ) {
 			$args['body'] = wp_json_encode( $payload );
 		}
 
-		$response = wp_safe_remote_request( esc_url_raw( $url ), $args );
+		$response = wp_safe_remote_request( $url, $args );
 		if ( is_wp_error( $response ) ) {
 			return new WP_Error(
 				'sortillus_network_error',
@@ -164,5 +174,15 @@ final class Woo_Sortillus_Lite_Client {
 
 		return is_array( $data ) ? $data : array();
 	}
-}
 
+	private function is_allowed_api_url( $url ) {
+		$parts = wp_parse_url( $url );
+		$host  = wp_parse_url( WOO_SORTILLUS_LITE_API_ORIGIN, PHP_URL_HOST );
+		return is_array( $parts ) && is_string( $host ) &&
+			'https' === strtolower( $parts['scheme'] ?? '' ) &&
+			strtolower( $host ) === strtolower( $parts['host'] ?? '' ) &&
+			443 === (int) ( $parts['port'] ?? 443 ) &&
+			! isset( $parts['user'] ) && ! isset( $parts['pass'] ) &&
+			! isset( $parts['fragment'] ) && false === strpos( $url, '\\' );
+	}
+}

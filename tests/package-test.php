@@ -42,7 +42,6 @@ $required_markers = array(
 	'woo_sortillus_lite_import_batch',
 	'sortillus-lite/v1',
 	'wp_make_link_relative',
-	'request_origin',
 );
 foreach ( $required_markers as $marker ) {
 	if ( false === strpos( $all_php, $marker ) ) {

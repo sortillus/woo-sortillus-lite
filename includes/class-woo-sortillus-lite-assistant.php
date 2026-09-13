@@ -125,19 +125,9 @@ final class Woo_Sortillus_Lite_Assistant {
 			array(
 				$this->origin( home_url( '/' ) ),
 				$this->origin( site_url( '/' ) ),
-				$this->request_origin( $source_origin ),
 			)
 		);
 		return in_array( $source_origin, array_unique( $allowed ), true );
-	}
-
-	private function request_origin( $source_origin ) {
-		$host = sanitize_text_field( wp_unslash( (string) ( $_SERVER['HTTP_HOST'] ?? '' ) ) );
-		if ( ! preg_match( '/^[a-z0-9.-]+(?::[0-9]{1,5})?$/i', $host ) ) {
-			return '';
-		}
-		$scheme = wp_parse_url( $source_origin, PHP_URL_SCHEME );
-		return in_array( $scheme, array( 'http', 'https' ), true ) ? strtolower( $scheme . '://' . $host ) : '';
 	}
 
 	private function origin( $url ) {

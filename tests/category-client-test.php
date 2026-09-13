@@ -26,7 +26,7 @@ function esc_url_raw( $value ) { return $value; }
 function sanitize_text_field( $value ) { return $value; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 function home_url() { return 'https://shop.example/'; }
-function wp_parse_url( $value, $component ) { return parse_url( $value, $component ); }
+function wp_parse_url( $value, $component = -1 ) { return parse_url( $value, $component ); }
 function get_bloginfo() { return 'test'; }
 function wp_safe_remote_request( $url, $args ) { global $requests, $response; $requests[] = array( $url, $args ); return $response; }
 function wp_remote_retrieve_response_code( $value ) { return $value['status']; }
@@ -61,4 +61,46 @@ check_client( in_array( 'taxonomy:write', $activation['scopes'], true ), 'Activa
 unset( $options[Woo_Sortillus_Lite_Settings::OPTION_CATEGORIES_ENDPOINT] );
 $client->send_categories( $categories, 'fallback' );
 check_client( end( $requests )[0] === 'https://data.sortillus.com/api/v3/shop/categories/batch', 'Old installations need the correct fallback endpoint.' );
+
+// Exercise every saved endpoint through the real client before any HTTP dispatch.
+$endpoint_calls = array(
+	Woo_Sortillus_Lite_Settings::OPTION_CATEGORIES_ENDPOINT => function () use ( $client, $categories ) { return $client->send_categories( $categories, 'security' ); },
+	Woo_Sortillus_Lite_Settings::OPTION_OFFERS_ENDPOINT => function () use ( $client ) { return $client->send_offers( array(), 'security' ); },
+	Woo_Sortillus_Lite_Settings::OPTION_HEALTH_ENDPOINT => function () use ( $client ) { return $client->health(); },
+	Woo_Sortillus_Lite_Settings::OPTION_SYNCS_ENDPOINT => function () use ( $client ) { return $client->report_sync( array(), 'security' ); },
+	Woo_Sortillus_Lite_Settings::OPTION_SESSIONS_ENDPOINT => function () use ( $client ) { return $client->create_assistant_session( array() ); },
+);
+$invalid_endpoints = array(
+	'http://data.sortillus.com/api/test',
+	'https://untrusted.example/api/test',
+	'https://data.sortillus.com.untrusted.example/api/test',
+	'https://data.sortillus.com@untrusted.example/api/test',
+	'https://user@data.sortillus.com/api/test',
+	'https://user:password@data.sortillus.com/api/test',
+	'https://data.sortillus.com:8443/api/test',
+	'//data.sortillus.com/api/test',
+	'/api/test',
+	'https://data.sortillus.com/api/test#fragment',
+	'https://data.sortillus.com\\@untrusted.example/api/test',
+);
+foreach ( $endpoint_calls as $option => $call ) {
+	foreach ( $invalid_endpoints as $endpoint ) {
+		$options[$option] = $endpoint;
+		$before = count( $requests );
+		$error = $call();
+		check_client( is_wp_error( $error ), 'Reject an untrusted endpoint.' );
+		check_client( false === $error->get_error_data()['retryable'], 'Invalid endpoints must not be retried.' );
+		check_client( $before === count( $requests ), 'Never dispatch credentials or data to an untrusted endpoint.' );
+	}
+	unset( $options[$option] );
+}
+foreach ( array( 'https://data.sortillus.com/api/test', 'https://DATA.SORTILLUS.COM:443/api/test' ) as $endpoint ) {
+	$options[Woo_Sortillus_Lite_Settings::OPTION_HEALTH_ENDPOINT] = $endpoint;
+	check_client( ! is_wp_error( $client->health() ), 'Allow HTTPS requests to the trusted host on port 443.' );
+	check_client( 0 === end( $requests )[1]['redirection'], 'Authenticated requests must not follow redirects.' );
+}
+$response = array( 'status' => 302, 'body' => array() );
+check_client( is_wp_error( $client->health() ), 'A redirect must fail instead of being followed.' );
+$client->activate( 'activation-test' );
+check_client( 0 === end( $requests )[1]['redirection'], 'Activation tokens must also be protected from redirects.' );
 echo "Sortillus Lite category client test passed.\n";
