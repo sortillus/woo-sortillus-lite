@@ -9,9 +9,10 @@ Minimal WooCommerce connector for Sortillus.
 - Import all published WooCommerce product parents in background batches.
 - Display store-level import progress and Sortillus connector health.
 - Send a product offer after WooCommerce product creation, update, or stock-status changes.
+- Automatically send created or updated product categories, including their ancestors, in parent-first order.
 - Optionally load the hosted Sortillus Shop Assistant widget; disabled by default. The plugin places its launcher next to a recognized header product-search form and falls back to a floating button when no search form is available.
 
-The plugin intentionally does not include automatic taxonomy change hooks, inbound callbacks, recommendations, semantic-search replacement, order export, or per-product sync metadata.
+The plugin intentionally does not include category deletion sync, automatic tag sync, inbound callbacks, recommendations, semantic-search replacement, order export, or per-product sync metadata.
 
 ## Data flow
 
@@ -33,6 +34,8 @@ The full Woo Sortillus plugin and the lite plugin must not be active together.
 Themes with custom header markup can override the detected search element with the `woo_sortillus_lite_assistant_desktop_selector` and `woo_sortillus_lite_assistant_mobile_selector` filters.
 
 Category import uses `POST /api/v3/shop/categories/batch` with the connector token. Rails creates categories in that installation's domain with the `woocommerce` source platform. Existing connections need to reconnect with a new activation token to grant `taxonomy:write`. Partial category responses keep product import locked; retrying upserts the categories safely. Missing offer categories are ignored by Rails; existing categories are still assigned.
+
+Once connected, creating or editing a product category queues an automatic update with a five-second delay. Delivery depends on WooCommerce Action Scheduler. The update includes the category's current name, description, and parent hierarchy, including empty categories. Temporary API failures retry up to five times; final errors appear in the category status area. Automatic updates do not replace the initial category import or mark it complete.
 
 ## Tests
 

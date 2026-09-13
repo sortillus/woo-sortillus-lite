@@ -37,6 +37,8 @@ $required_markers = array(
 	"'integration:write'",
 	"'chat:write'",
 	'woocommerce_new_product',
+	'created_product_cat',
+	'edited_product_cat',
 	'woocommerce_update_product',
 	'woocommerce_product_set_stock_status',
 	'woo_sortillus_lite_import_batch',
@@ -52,7 +54,6 @@ foreach ( $required_markers as $marker ) {
 
 $forbidden_markers = array(
 	'woocommerce_order_status',
-	'created_product_cat',
 	'created_product_tag',
 	'woo_sortillus_lite_search',
 	'woo_sortillus_lite_recommend',

@@ -7,6 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class Woo_Sortillus_Lite_Sync {
 	const GROUP           = 'woo-sortillus-lite';
 	const CATEGORY_HOOK   = 'woo_sortillus_lite_category_batch';
+	const CATEGORY_DELTA_HOOK = 'woo_sortillus_lite_send_category';
 	const IMPORT_HOOK     = 'woo_sortillus_lite_import_batch';
 	const DELTA_HOOK      = 'woo_sortillus_lite_send_product';
 	const BATCH_SIZE      = 100;
@@ -27,6 +28,9 @@ final class Woo_Sortillus_Lite_Sync {
 	}
 
 	public function init() {
+		add_action( 'created_product_cat', array( $this, 'queue_category' ), 20, 1 );
+		add_action( 'edited_product_cat', array( $this, 'queue_category' ), 20, 1 );
+		add_action( self::CATEGORY_DELTA_HOOK, array( $this, 'run_category_delta' ), 10, 3 );
 		add_action( 'woocommerce_new_product', array( $this, 'queue_product' ), 20, 1 );
 		add_action( 'woocommerce_update_product', array( $this, 'queue_product' ), 20, 1 );
 		add_action( 'woocommerce_product_set_stock_status', array( $this, 'queue_product' ), 20, 1 );
@@ -161,14 +165,7 @@ final class Woo_Sortillus_Lite_Sync {
 				$this->fail_category_import( $state, __( 'A category changed during import. Retry category import.', 'woo-sortillus-lite' ) );
 				return;
 			}
-			$categories[] = array(
-				'external_id' => (int) $term->term_id,
-				'external_parent_id' => (int) $term->parent,
-				'name' => $term->name,
-				'description' => $term->description,
-				'source_locale' => get_locale(),
-				'active' => true,
-			);
+			$categories[] = $this->category_payload( $term );
 		}
 		$result = $this->client->send_categories( $categories, $run_id . ':categories:' . $state['processed'] );
 		if ( is_wp_error( $result ) ) {
@@ -189,6 +186,86 @@ final class Woo_Sortillus_Lite_Sync {
 		if ( 'succeeded' !== $state['status'] && ! $this->schedule_category_batch( $state, 0 ) ) {
 			$this->fail_category_import( $state, __( 'Could not schedule the next category batch. Retry category import.', 'woo-sortillus-lite' ) );
 		}
+	}
+
+	private function category_payload( $term ) {
+		return array(
+			'external_id' => (int) $term->term_id,
+			'external_parent_id' => (int) $term->parent,
+			'name' => $term->name,
+			'description' => $term->description,
+			'source_locale' => get_locale(),
+			'active' => true,
+		);
+	}
+
+	public function queue_category( $term_id ) {
+		$term_id = absint( $term_id );
+		if ( ! $term_id || ! $this->settings->is_connected() ) {
+			return;
+		}
+		// Each save gets an action, including edits made while an earlier send is retrying.
+		if ( ! $this->schedule_category_delta( $term_id, 0, wp_generate_uuid4(), 5 ) ) {
+			$this->record_category_delta( __( 'Could not schedule the category update. Save the category again to retry.', 'woo-sortillus-lite' ) );
+		}
+	}
+
+	public function run_category_delta( $term_id, $attempt, $idempotency_key ) {
+		if ( ! $this->settings->is_connected() ) {
+			return;
+		}
+		$term_id = absint( $term_id );
+		$category_id = $term_id;
+		$categories = array();
+		while ( $term_id ) {
+			if ( isset( $categories[ $term_id ] ) ) {
+				$this->record_category_delta( __( 'A category has a hierarchy cycle. Correct the WooCommerce categories and save again.', 'woo-sortillus-lite' ) );
+				return;
+			}
+			$term = get_term( $term_id, 'product_cat' );
+			if ( ! $term || is_wp_error( $term ) ) {
+				// A category deleted before its queued send no longer needs an update.
+				if ( $categories || is_wp_error( $term ) ) {
+					$this->record_category_delta( __( 'Could not read the category hierarchy. Correct the WooCommerce categories and save again.', 'woo-sortillus-lite' ) );
+				}
+				return;
+			}
+			$categories[ $term_id ] = $this->category_payload( $term );
+			$term_id = (int) $term->parent;
+		}
+		if ( ! $categories ) {
+			return;
+		}
+		// Ancestors may not have reached Sortillus yet. Upsert them before the child.
+		foreach ( array_chunk( array_reverse( $categories ), self::BATCH_SIZE ) as $batch ) {
+			// Reload current values on every attempt; changed payloads need a new key.
+			$key = $idempotency_key . ':' . hash( 'sha256', wp_json_encode( $batch ) );
+			$result = $this->client->send_categories( $batch, $key );
+			if ( is_wp_error( $result ) ) {
+				if ( $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT &&
+					$this->schedule_category_delta( $category_id, (int) $attempt + 1, $idempotency_key, $this->retry_delay( $result, $attempt ) ) ) {
+					return;
+				}
+				$this->record_category_delta( $result->get_error_message() );
+				return;
+			}
+		}
+		$this->record_category_delta( null );
+	}
+
+	private function schedule_category_delta( $term_id, $attempt, $idempotency_key, $delay ) {
+		if ( ! function_exists( 'as_schedule_single_action' ) ) {
+			return false;
+		}
+		$action = as_schedule_single_action( time() + $delay, self::CATEGORY_DELTA_HOOK, array( $term_id, $attempt, $idempotency_key ), self::GROUP, false );
+		return $action && ! is_wp_error( $action );
+	}
+
+	private function record_category_delta( $error ) {
+		$state = $this->settings->get_category_state();
+		$state['last_delta_at'] = gmdate( 'c' );
+		$state['last_delta_error'] = $error;
+		$this->settings->set_category_state( $state );
 	}
 
 	private function schedule_category_batch( array $state, $attempt, $delay = 1 ) {

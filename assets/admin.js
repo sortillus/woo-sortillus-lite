@@ -43,7 +43,7 @@
     categoryButton.textContent = categoryActive ? config.i18n.starting : config.i18n.importCategories;
     categoryStatus.textContent = categoryReady ? config.i18n.categoriesDone :
       categoryActive ? Number(category.processed || 0) + " / " + Number(category.total || 0) + " " + config.i18n.categories : config.i18n.categoriesFirst;
-    categoryError.textContent = category.last_error || "";
+    categoryError.textContent = category.last_error || category.last_delta_error || "";
     button.hidden = !categoryReady || categoryActive;
     button.disabled = active || !categoryReady || categoryActive;
     button.textContent = active ? config.i18n.starting : config.i18n.importAgain;
