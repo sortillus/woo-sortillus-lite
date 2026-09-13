@@ -2,6 +2,8 @@
 
 Minimal WooCommerce connector for Sortillus.
 
+See the [installation and setup instructions](installation.md) for requirements, connection, catalog import, and troubleshooting.
+
 ## Features
 
 - Connect or reconnect with a one-time activation token.

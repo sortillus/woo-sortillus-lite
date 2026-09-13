@@ -52,7 +52,7 @@ Activating the WordPress plugin and connecting it to Sortillus are separate step
 
 Product import runs in background batches and imports published WooCommerce products. After setup, the plugin sends product offers when products are created or updated, or their stock status changes.
 
-Category changes are not imported automatically. Run **Import Categories** again after changing your WooCommerce categories.
+After the initial import, new and edited product categories are sent automatically in the background. Run **Import Categories** again if you need to rebuild the full category catalog.
 
 ## 5. Enable the shopping assistant, if wanted
 
