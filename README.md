@@ -42,3 +42,9 @@ Once connected, creating or editing a product category queues an automatic updat
 ## Tests
 
 Run `php tests/package-test.php`, `php tests/offer-builder-test.php`, `php tests/sync-test.php`, `php tests/category-client-test.php`, `php tests/assistant-security-test.php`, and `node tests/admin-test.js`.
+
+## License
+
+This plugin is licensed under the MIT License. See [LICENSE](LICENSE).
+
+The same code is also available under the GNU General Public License, version 2 or later, so it can be combined with WordPress under GPL terms.

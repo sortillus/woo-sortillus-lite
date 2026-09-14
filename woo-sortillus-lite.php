@@ -5,10 +5,12 @@
  * Description: Connects WooCommerce to Sortillus, imports product offers, and adds the hosted shopping assistant.
  * Version: 1.1.0
  * Author: Sortillus
+ * Author URI: https://sortillus.com
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Requires Plugins: woocommerce
- * License: GPL v2 or later
+ * License: MIT
+ * License URI: https://opensource.org/licenses/MIT
  * Text Domain: woo-sortillus-lite
  * WC requires at least: 5.0
  */
