@@ -21,7 +21,9 @@ function __( $value ) { return $value; }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 function wp_generate_uuid4() { static $id = 0; ++$id; return '00000000-0000-4000-8000-' . str_pad( (string) $id, 12, '0', STR_PAD_LEFT ); }
 function wp_count_posts() { return (object) array( 'publish' => 2 ); }
-function get_post_status() { return 'publish'; }
+$post_statuses = array();
+function get_post_status( $id = 0 ) { global $post_statuses; return $post_statuses[ (int) $id ] ?? 'publish'; }
+function get_post_type() { return 'product'; }
 function absint( $value ) { return abs( (int) $value ); }
 function get_transient( $key ) { global $transients; return $transients[ $key ] ?? false; }
 function set_transient( $key, $value ) { global $transients; $transients[ $key ] = $value; return true; }
@@ -54,6 +56,10 @@ final class Woo_Sortillus_Lite_Settings {
 	public function is_connected() { return $this->connected; }
 	public function get_sync_state() { return $this->state; }
 	public function set_sync_state( array $state ) { $this->state = $state; }
+	public $issues = array();
+	public function get_product_issues() { return $this->issues; }
+	public function record_product_issue( $product_id, array $issue ) { $this->issues[ (int) $product_id ] = $issue; }
+	public function clear_product_issue( $product_id ) { unset( $this->issues[ (int) $product_id ] ); }
 }
 
 final class Woo_Sortillus_Lite_Client {
@@ -69,11 +75,15 @@ final class Woo_Sortillus_Lite_Client {
 		$this->batches[] = array( $offers, $key );
 		return null !== $this->batch_result ? $this->batch_result : array();
 	}
-	public function send_offer( array $offer, $key ) { $this->deltas[] = array( $offer, $key ); return array(); }
+	public $delta_result = array();
+	public function send_offer( array $offer, $key ) { $this->deltas[] = array( $offer, $key ); return $this->delta_result; }
 }
 
 final class Woo_Sortillus_Lite_Offer_Builder {
+	public $incomplete = array();
 	public function build( $product_id ) { return array( 'external_offer_id' => (string) $product_id ); }
+	public function missing_fields( array $offer ) { return in_array( (int) $offer['external_offer_id'], $this->incomplete, true ) ? array( 'seller_image_url' ) : array(); }
+	public function removal( $product_id ) { return array( 'external_offer_id' => (string) $product_id, 'deleted' => true ); }
 }
 
 final class Fake_Wpdb {
@@ -289,3 +299,93 @@ $delivery( 105, 0, 'deep-hierarchy' );
 assert_sync( 2 === count( $cat_client->category_batches ) && 100 === count( $cat_client->category_batches[0][0] ), 'Large category hierarchies must respect the batch size.' );
 assert_sync( 100 === $cat_client->category_batches[1][0][0]['external_parent_id'] && 105 === $cat_client->category_batches[1][0][4]['external_id'], 'A second hierarchy batch must follow its saved parents.' );
 echo "Sortillus Lite automatic category sync test passed.\n";
+
+// Contract v2: per-offer results, incomplete products and removals.
+$scheduled_actions      = array();
+$unique_hooks_in_flight = array();
+$v2_settings            = new Woo_Sortillus_Lite_Settings();
+$v2_client              = new Woo_Sortillus_Lite_Client();
+$v2_builder             = new Woo_Sortillus_Lite_Offer_Builder();
+$v2_sync                = new Woo_Sortillus_Lite_Sync( $v2_settings, $v2_client, $v2_builder );
+function run_v2_import( $sync, $settings ) {
+	global $scheduled_actions, $wpdb;
+	$wpdb->reads     = 0;
+	$settings->state = array();
+	$sync->start_import();
+	$args = end( $scheduled_actions )['args'];
+	$sync->run_import_batch( $args[0], $args[1], $args[2], $args[3] );
+}
+
+$v2_builder->incomplete  = array( 2 );
+$v2_client->batch_result = array( 'offers' => array( array( 'id' => 7 ) ), 'errors' => array() );
+run_v2_import( $v2_sync, $v2_settings );
+$sent = end( $v2_client->batches )[0];
+assert_sync( array( '1', '2' ) === array_column( $sent, 'external_offer_id' ) && true === $sent[1]['deleted'], 'An incomplete product must not be sent; its removal follows the complete offers.' );
+assert_sync( 1 === $v2_settings->state['accepted'] && 1 === $v2_settings->state['rejected'] && 1 === $v2_settings->state['skipped'], 'A skipped product counts as rejected, not accepted.' );
+assert_sync( array( 'reason' => 'incomplete', 'fields' => array( 'seller_image_url' ) ) === $v2_settings->issues[2], 'A skipped product must be listed with its missing fields.' );
+
+$v2_builder->incomplete  = array();
+$v2_settings->issues[1]  = array( 'reason' => 'rejected' );
+$v2_client->batch_result = array(
+	'offers' => array( array( 'id' => 7 ) ),
+	'errors' => array( array( 'index' => 1, 'error' => 'Missing required fields: price', 'missing_fields' => array( 'price' ) ) ),
+);
+run_v2_import( $v2_sync, $v2_settings );
+assert_sync( 1 === $v2_settings->state['accepted'] && 1 === $v2_settings->state['rejected'], 'A 207 must count only the offers Sortillus saved.' );
+assert_sync( array( 'reason' => 'rejected', 'message' => 'Missing required fields: price', 'fields' => array( 'price' ) ) === $v2_settings->issues[2], 'A rejected offer must be listed with its missing fields.' );
+assert_sync( ! isset( $v2_settings->issues[1] ), 'An accepted offer must clear its earlier problem.' );
+
+$v2_client->batch_result = array(
+	'offers' => array( array( 'id' => 7 ) ),
+	'errors' => array( array( 'index' => 0, 'status' => 'needs_review', 'error_code' => 'offer_report_conflict', 'intake_id' => 4 ) ),
+);
+run_v2_import( $v2_sync, $v2_settings );
+assert_sync( array( 'reason' => 'needs_review', 'error_code' => 'offer_report_conflict' ) === $v2_settings->issues[1], 'An offer held for review must be listed.' );
+
+$before = count( $scheduled_actions );
+$v2_client->batch_result = new WP_Error( 'http', 'Source catalog ingestion is not enabled for this sender', array( 'retryable' => false, 'status' => 422 ) );
+run_v2_import( $v2_sync, $v2_settings );
+$next = end( $scheduled_actions );
+assert_sync( 0 === $next['args'][2] && 2 === $next['args'][1], 'A 422 must not be retried; the import moves to the next batch.' );
+assert_sync( 2 === $v2_settings->state['rejected'] && 0 === $v2_settings->state['accepted'], 'A rejected batch must count every offer as rejected.' );
+
+$v2_client->delta_result = array( 'status' => 'needs_review', 'error_code' => 'unknown_seller', 'intake_id' => 9 );
+$v2_sync->run_product_delta( 5, 0, 'delta-review' );
+assert_sync( 'needs_review' === $v2_settings->issues[5]['reason'] && false !== strpos( $v2_settings->state['last_delta_error'], 'unknown_seller' ), 'A single offer held for review must be listed and reported.' );
+
+$v2_builder->incomplete  = array( 6 );
+$v2_client->delta_result = new WP_Error( 'http', 'No offer with this ID to remove', array( 'retryable' => false, 'error_code' => 'offer_not_found' ) );
+$v2_sync->run_product_delta( 6, 0, 'delta-incomplete' );
+assert_sync( array( 'external_offer_id' => '6', 'deleted' => true ) === end( $v2_client->deltas )[0], 'Saving an incomplete product must send its removal instead of the offer.' );
+assert_sync( 'incomplete' === $v2_settings->issues[6]['reason'] && false !== strpos( $v2_settings->state['last_delta_error'], 'Missing' ), 'An incomplete saved product must be listed.' );
+
+$v2_sync->init();
+$unpublish = $registered_actions['transition_post_status'][0];
+$before    = count( $scheduled_actions );
+$unpublish( 'trash', 'publish', (object) array( 'ID' => 8, 'post_type' => 'product' ) );
+$unpublish( 'publish', 'draft', (object) array( 'ID' => 8, 'post_type' => 'product' ) );
+$unpublish( 'draft', 'publish', (object) array( 'ID' => 9, 'post_type' => 'page' ) );
+$queued = end( $scheduled_actions );
+assert_sync( $before + 1 === count( $scheduled_actions ) && Woo_Sortillus_Lite_Sync::REMOVAL_HOOK === $queued['hook'] && 8 === $queued['args'][0], 'Only unpublishing a product must queue its removal.' );
+
+$post_statuses[8]       = 'trash';
+$v2_settings->issues[8] = array( 'reason' => 'incomplete', 'fields' => array() );
+$removal                = $registered_actions[ Woo_Sortillus_Lite_Sync::REMOVAL_HOOK ][0];
+$removal( ...$queued['args'] );
+assert_sync( array( 'external_offer_id' => '8', 'deleted' => true ) === end( $v2_client->deltas )[0], 'The removal job must send the removal.' );
+assert_sync( null === $v2_settings->state['last_delta_error'] && ! isset( $v2_settings->issues[8] ), 'offer_not_found means nothing to remove: no error, problem cleared.' );
+
+$v2_client->delta_result = new WP_Error( 'temporary', 'Retry', array( 'retryable' => true ) );
+$before                  = count( $scheduled_actions );
+$removal( 8, 0, 'removal-retry' );
+assert_sync( $before + 1 === count( $scheduled_actions ) && 1 === end( $scheduled_actions )['args'][1], 'A failed removal must be retried.' );
+
+$post_statuses[8] = 'publish';
+$before_deltas    = count( $v2_client->deltas );
+$removal( 8, 0, 'republished' );
+assert_sync( $before_deltas === count( $v2_client->deltas ), 'A product published again must keep its offer.' );
+
+$before = count( $scheduled_actions );
+$registered_actions['before_delete_post'][0]( 10 );
+assert_sync( $before + 1 === count( $scheduled_actions ), 'Deleting a published product outright must queue its removal.' );
+echo "Sortillus Lite contract v2 sync test passed.\n";

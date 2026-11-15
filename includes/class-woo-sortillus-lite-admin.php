@@ -194,6 +194,11 @@ final class Woo_Sortillus_Lite_Admin {
 				</div>
 
 				<div class="woo-sortillus-lite-card">
+					<h2><?php esc_html_e( 'Products That Need Attention', 'woo-sortillus-lite' ); ?></h2>
+					<?php $this->render_product_issues(); ?>
+				</div>
+
+				<div class="woo-sortillus-lite-card">
 					<h2><?php esc_html_e( 'Shopping Assistant', 'woo-sortillus-lite' ); ?></h2>
 					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 						<input type="hidden" name="action" value="woo_sortillus_lite_save_assistant">
@@ -215,6 +220,62 @@ final class Woo_Sortillus_Lite_Admin {
 			.woo-sortillus-lite-error{color:#b32d2e}
 		</style>
 		<?php
+	}
+
+	private function render_product_issues() {
+		$issues = $this->settings->get_product_issues();
+		if ( ! $issues ) {
+			echo '<p>' . esc_html__( 'Sortillus has every product the last sync sent.', 'woo-sortillus-lite' ) . '</p>';
+			return;
+		}
+		$count = count( $issues );
+		/* translators: %d: number of products */
+		echo '<p>' . esc_html( sprintf( _n( '%d product is not in Sortillus. Fix it in WooCommerce and save it to send it again.', '%d products are not in Sortillus. Fix them in WooCommerce and save them to send them again.', $count, 'woo-sortillus-lite' ), $count ) ) . '</p>';
+		echo '<table class="widefat striped"><thead><tr><th>' . esc_html__( 'Product', 'woo-sortillus-lite' ) . '</th><th>' .
+			esc_html__( 'Problem', 'woo-sortillus-lite' ) . '</th><th>' . esc_html__( 'Since', 'woo-sortillus-lite' ) . '</th></tr></thead><tbody>';
+		foreach ( array_slice( array_reverse( $issues, true ), 0, 50, true ) as $product_id => $issue ) {
+			$title = get_the_title( $product_id );
+			$label = '' !== (string) $title ? $title : '#' . $product_id;
+			$link  = get_edit_post_link( $product_id );
+			echo '<tr><td>' . ( $link ? '<a href="' . esc_url( $link ) . '">' . esc_html( $label ) . '</a>' : esc_html( $label ) ) . '</td><td>' .
+				esc_html( $this->issue_text( (array) $issue ) ) . '</td><td>' . esc_html( (string) ( $issue['at'] ?? '' ) ) . '</td></tr>';
+		}
+		echo '</tbody></table>';
+		if ( $count > 50 ) {
+			/* translators: %d: number of products not listed */
+			echo '<p>' . esc_html( sprintf( __( '%d more not shown.', 'woo-sortillus-lite' ), $count - 50 ) ) . '</p>';
+		}
+	}
+
+	private function issue_text( array $issue ) {
+		$labels = array(
+			'product_name'     => __( 'name', 'woo-sortillus-lite' ),
+			'description'      => __( 'description', 'woo-sortillus-lite' ),
+			'seller_image_url' => __( 'product image', 'woo-sortillus-lite' ),
+			'price'            => __( 'price', 'woo-sortillus-lite' ),
+			'currency'         => __( 'store currency', 'woo-sortillus-lite' ),
+			'availability'     => __( 'stock status', 'woo-sortillus-lite' ),
+			'product_url'      => __( 'product link', 'woo-sortillus-lite' ),
+		);
+		$fields = array();
+		foreach ( (array) ( $issue['fields'] ?? array() ) as $field ) {
+			$fields[] = $labels[ $field ] ?? (string) $field;
+		}
+		switch ( $issue['reason'] ?? '' ) {
+			case 'incomplete':
+				/* translators: %s: comma-separated product fields */
+				return sprintf( __( 'Not sent. Add: %s', 'woo-sortillus-lite' ), implode( ', ', $fields ) );
+			case 'needs_review':
+				/* translators: %s: Sortillus review error code */
+				return sprintf( __( 'Held for review by Sortillus (%s). Contact Sortillus.', 'woo-sortillus-lite' ), (string) ( $issue['error_code'] ?? '' ) );
+			default:
+				$message = (string) ( $issue['message'] ?? '' );
+				return $fields
+					/* translators: %s: comma-separated product fields */
+					? sprintf( __( 'Rejected by Sortillus. Add: %s', 'woo-sortillus-lite' ), implode( ', ', $fields ) )
+					/* translators: %s: error message from Sortillus */
+					: sprintf( __( 'Rejected by Sortillus: %s', 'woo-sortillus-lite' ), $message );
+		}
 	}
 
 	private function render_notice() {

@@ -17,6 +17,8 @@ final class Woo_Sortillus_Lite_Settings {
 	const OPTION_SESSIONS_ENDPOINT = 'woo_sortillus_lite_sessions_endpoint';
 	const OPTION_ASSISTANT_ENABLED = 'woo_sortillus_lite_assistant_enabled';
 	const OPTION_SYNC_STATE        = 'woo_sortillus_lite_sync_state';
+	const OPTION_PRODUCT_ISSUES    = 'woo_sortillus_lite_product_issues';
+	const MAX_PRODUCT_ISSUES       = 500;
 
 	public function is_connected() {
 		return '' !== $this->get_token();
@@ -104,5 +106,30 @@ final class Woo_Sortillus_Lite_Settings {
 
 	public function set_sync_state( array $state ) {
 		update_option( self::OPTION_SYNC_STATE, $state, false );
+	}
+
+	// Products Sortillus does not have, keyed by product ID: not sent because a
+	// required field is missing, rejected, or held for review. Newest last.
+	public function get_product_issues() {
+		$issues = get_option( self::OPTION_PRODUCT_ISSUES, array() );
+		return is_array( $issues ) ? $issues : array();
+	}
+
+	public function record_product_issue( $product_id, array $issue ) {
+		$issues = $this->get_product_issues();
+		unset( $issues[ (int) $product_id ] );
+		$issues[ (int) $product_id ] = $issue + array( 'at' => gmdate( 'c' ) );
+		if ( count( $issues ) > self::MAX_PRODUCT_ISSUES ) {
+			$issues = array_slice( $issues, -self::MAX_PRODUCT_ISSUES, null, true );
+		}
+		update_option( self::OPTION_PRODUCT_ISSUES, $issues, false );
+	}
+
+	public function clear_product_issue( $product_id ) {
+		$issues = $this->get_product_issues();
+		if ( isset( $issues[ (int) $product_id ] ) ) {
+			unset( $issues[ (int) $product_id ] );
+			update_option( self::OPTION_PRODUCT_ISSUES, $issues, false );
+		}
 	}
 }
