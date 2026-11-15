@@ -103,4 +103,19 @@ $response = array( 'status' => 302, 'body' => array() );
 check_client( is_wp_error( $client->health() ), 'A redirect must fail instead of being followed.' );
 $client->activate( 'activation-test' );
 check_client( 0 === end( $requests )[1]['redirection'], 'Activation tokens must also be protected from redirects.' );
+
+// Offers use contract v2: top-level single sends, batches without `allow`.
+$offer = array( 'offer_identity_version' => 2, 'external_offer_id' => '42' );
+$response = array( 'status' => 201, 'body' => array( 'id' => 7 ) );
+$client->send_offer( $offer, 'single' );
+check_client( end( $requests )[0] === 'https://data.sortillus.com/api/v3/offers', 'Single offers go to the offers endpoint.' );
+check_client( json_decode( end( $requests )[1]['body'], true ) === $offer, 'A single offer must be sent at the top level.' );
+$response = array( 'status' => 200, 'body' => array( 'offers' => array(), 'errors' => array() ) );
+$client->send_offers( array( $offer ), 'batch' );
+check_client( json_decode( end( $requests )[1]['body'], true ) === array( 'offers' => array( $offer ) ), 'Batches must not send allow, so Sortillus reports every offer.' );
+$response = array( 'status' => 422, 'body' => array( 'error' => 'Missing required fields: price', 'missing_fields' => array( 'price' ) ) );
+$error = $client->send_offer( $offer, 'missing' );
+check_client( array( 'price' ) === $error->get_error_data()['missing_fields'] && false === $error->get_error_data()['retryable'], 'A 422 keeps missing_fields and is not retried.' );
+$response = array( 'status' => 422, 'body' => array( 'error' => 'No offer with this ID to remove', 'error_code' => 'offer_not_found' ) );
+check_client( 'offer_not_found' === $client->send_offer( $offer, 'removal' )->get_error_data()['error_code'], 'Keep the error code of a rejected request.' );
 echo "Sortillus Lite category client test passed.\n";

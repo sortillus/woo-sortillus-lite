@@ -5,6 +5,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class Woo_Sortillus_Lite_Offer_Builder {
+	// Sortillus rejects a v2 offer without any of these (HTTP 422, missing_fields).
+	const REQUIRED_FIELDS = array( 'product_name', 'description', 'seller_image_url', 'price', 'currency', 'availability', 'product_url' );
+
 	public function build( $product_id ) {
 		$product_id = absint( $product_id );
 		$product    = wc_get_product( $product_id );
@@ -21,37 +24,34 @@ final class Woo_Sortillus_Lite_Offer_Builder {
 			$price = (string) $product->get_variation_price( 'min', true );
 		}
 
+		// Offer contract v2. external_offer_id stays the product ID, as before,
+		// so Sortillus updates the offers this store sent with earlier versions.
 		$offer = array(
-			'id'                  => $product_id,
-			'external_offer_id'   => (string) $product_id,
-			'external_product_id' => (string) $product_id,
-			'product_id'          => (string) $product_id,
-			'external_id_string'  => 'woo:product:' . $product_id,
-			'title'               => (string) $product->get_name(),
-			'name'                => (string) $product->get_name(),
-			'product_name'        => (string) $product->get_name(),
-			'description'         => $this->description( $product ),
-			'url'                 => (string) get_permalink( $product_id ),
-			'product_url'         => (string) get_permalink( $product_id ),
-			'price'               => $price,
-			'currency'            => (string) get_woocommerce_currency(),
-			'available'           => $in_stock || $backorders,
-			'availability'        => $availability,
-			'availability_text'   => $stock_status,
-			'available_items'     => $backorders ? null : ( $product->managing_stock() ? $product->get_stock_quantity() : null ),
-			'in_stock'            => $in_stock,
-			'backorders_allowed'  => $backorders,
-			'virtual'             => (bool) $product->is_virtual(),
-			'downloadable'        => (bool) $product->is_downloadable(),
-			'categories'          => $this->terms( $product_id, 'product_cat', true ),
-			'tags'                => $this->terms( $product_id, 'product_tag', false ),
-			'specification'       => $this->specification( $product ),
-			'last_modified_at'    => get_post_modified_time( 'c', true, $product_id ),
+			'offer_identity_version' => 2,
+			'external_offer_id'      => (string) $product_id,
+			'external_product_id'    => (string) $product_id,
+			'title'                  => (string) $product->get_name(),
+			'product_name'           => (string) $product->get_name(),
+			'description'            => $this->description( $product ),
+			'product_url'            => (string) get_permalink( $product_id ),
+			'price'                  => $price,
+			'currency'               => (string) get_woocommerce_currency(),
+			'available'              => $in_stock || $backorders,
+			'availability'           => $availability,
+			'availability_text'      => $stock_status,
+			'available_items'        => $backorders ? null : ( $product->managing_stock() ? $product->get_stock_quantity() : null ),
+			'in_stock'               => $in_stock,
+			'backorders_allowed'     => $backorders,
+			'virtual'                => (bool) $product->is_virtual(),
+			'downloadable'           => (bool) $product->is_downloadable(),
+			'categories'             => $this->terms( $product_id, 'product_cat', true ),
+			'tags'                   => $this->terms( $product_id, 'product_tag', false ),
+			'specification'          => $this->specification( $product ),
+			'last_modified_at'       => get_post_modified_time( 'c', true, $product_id ),
 		);
 
 		$image = $this->primary_image_url( $product );
 		if ( $image ) {
-			$offer['image']            = $image;
 			$offer['seller_image_url'] = $image;
 		}
 		$images = $this->images( $product );
@@ -78,6 +78,27 @@ final class Woo_Sortillus_Lite_Offer_Builder {
 		}
 
 		return $offer;
+	}
+
+	// The required fields an offer lacks; such a product is not sent.
+	public function missing_fields( array $offer ) {
+		$missing = array();
+		foreach ( self::REQUIRED_FIELDS as $field ) {
+			$value = $offer[ $field ] ?? null;
+			if ( null === $value || ( is_string( $value ) && '' === trim( $value ) ) ) {
+				$missing[] = $field;
+			}
+		}
+		return $missing;
+	}
+
+	// Removes the product's offer from Sortillus. Only the ID is needed.
+	public function removal( $product_id ) {
+		return array(
+			'offer_identity_version' => 2,
+			'external_offer_id'      => (string) absint( $product_id ),
+			'deleted'                => true,
+		);
 	}
 
 	private function description( $product ) {

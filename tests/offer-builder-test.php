@@ -51,13 +51,15 @@ final class Fake_Woo_Product {
 	public $in_stock = true;
 	public $backorders = 'no';
 	public $image_id = 9;
+	public $description = '<p>Long description</p>';
+	public $short_description = 'Short description';
 
 	public function get_id() { return 42; }
 	public function get_type() { return $this->type; }
 	public function is_type( $type ) { return $this->type === $type; }
 	public function get_name() { return 'Test product'; }
-	public function get_description() { return '<p>Long description</p>'; }
-	public function get_short_description() { return 'Short description'; }
+	public function get_description() { return $this->description; }
+	public function get_short_description() { return $this->short_description; }
 	public function get_stock_status() { return $this->stock_status; }
 	public function get_backorders() { return $this->backorders; }
 	public function is_in_stock() { return $this->in_stock; }
@@ -97,8 +99,13 @@ assert_same( true, $offer['available'], 'In-stock product must be available' );
 assert_same( 2, $offer['availability'], 'In-stock availability code must be 2' );
 assert_same( 'SKU-42', $offer['sku'], 'SKU must be mapped' );
 assert_same( 'Example Brand', $offer['brand'], 'Brand must be mapped' );
-assert_same( 'https://shop.example/image-9.jpg', $offer['image'], 'Attachment image must be preferred' );
 assert_same( 'https://shop.example/image-9.jpg', $offer['seller_image_url'], 'Attachment seller image must be preferred' );
+assert_same( 2, $offer['offer_identity_version'], 'Offers must use contract v2' );
+assert_same( '42', $offer['external_product_id'], 'The WooCommerce product ID must be the product identity' );
+foreach ( array( 'id', 'product_id', 'external_id_string', 'image', 'name', 'url' ) as $legacy_key ) {
+	assert_same( false, array_key_exists( $legacy_key, $offer ), 'Legacy key must not be sent: ' . $legacy_key );
+}
+assert_same( array(), $builder->missing_fields( $offer ), 'A complete product must have no missing fields' );
 
 $test_product->type         = 'variable';
 $test_product->price        = '';
@@ -129,7 +136,24 @@ $test_post_meta             = array(
 	),
 );
 $offer = $builder->build( 42 );
-assert_same( 'https://cdn.example/external-product.jpg', $offer['image'], 'External image meta must fill image when no attachment exists' );
 assert_same( 'https://cdn.example/external-product.jpg', $offer['seller_image_url'], 'External image meta must fill seller_image_url when no attachment exists' );
+
+$test_post_meta = array();
+$offer          = $builder->build( 42 );
+assert_same( false, isset( $offer['seller_image_url'] ), 'A product without any image must not send seller_image_url' );
+assert_same( array( 'seller_image_url' ), $builder->missing_fields( $offer ), 'A product without an image must be reported as incomplete' );
+
+$test_product->image_id          = 9;
+$test_product->description       = '<p> </p>';
+$test_product->short_description = '';
+$test_product->price             = '';
+$offer                           = $builder->build( 42 );
+assert_same( array( 'description', 'price' ), $builder->missing_fields( $offer ), 'Blank description and price must be reported as missing' );
+
+assert_same(
+	array( 'offer_identity_version' => 2, 'external_offer_id' => '42', 'deleted' => true ),
+	$builder->removal( 42 ),
+	'A removal must carry only the contract version, the offer ID and deleted'
+);
 
 echo "Sortillus Lite offer builder test passed.\n";

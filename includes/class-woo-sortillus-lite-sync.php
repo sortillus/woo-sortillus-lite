@@ -10,6 +10,7 @@ final class Woo_Sortillus_Lite_Sync {
 	const CATEGORY_DELTA_HOOK = 'woo_sortillus_lite_send_category';
 	const IMPORT_HOOK     = 'woo_sortillus_lite_import_batch';
 	const DELTA_HOOK      = 'woo_sortillus_lite_send_product';
+	const REMOVAL_HOOK    = 'woo_sortillus_lite_remove_product';
 	const BATCH_SIZE      = 100;
 	const MAX_RETRY_COUNT = 5;
 
@@ -37,6 +38,9 @@ final class Woo_Sortillus_Lite_Sync {
 		add_action( self::CATEGORY_HOOK, array( $this, 'run_category_batch' ), 10, 2 );
 		add_action( self::IMPORT_HOOK, array( $this, 'run_import_batch' ), 10, 4 );
 		add_action( self::DELTA_HOOK, array( $this, 'run_product_delta' ), 10, 3 );
+		add_action( 'transition_post_status', array( $this, 'queue_removal_on_unpublish' ), 20, 3 );
+		add_action( 'before_delete_post', array( $this, 'queue_removal_on_delete' ), 20, 1 );
+		add_action( self::REMOVAL_HOOK, array( $this, 'run_product_removal' ), 10, 3 );
 	}
 
 	public function start_import() {
@@ -67,6 +71,7 @@ final class Woo_Sortillus_Lite_Sync {
 			'processed'               => 0,
 			'accepted'                => 0,
 			'rejected'                => 0,
+			'skipped'                 => 0,
 			'cursor'                  => 0,
 			'source_total_at_start'   => $total,
 			'started_at'              => $now,
@@ -323,18 +328,32 @@ final class Woo_Sortillus_Lite_Sync {
 			return;
 		}
 
-		$offers  = array();
-		$invalid = 0;
+		$offers   = array();
+		$sent_ids = array();
+		$skipped  = array();
+		$invalid  = 0;
 		foreach ( $product_ids as $product_id ) {
 			$offer = $this->builder->build( $product_id );
 			if ( null === $offer ) {
 				++$invalid;
 				continue;
 			}
-			$offers[] = $offer;
+			$missing = $this->builder->missing_fields( $offer );
+			if ( $missing ) {
+				$skipped[ $product_id ] = $missing;
+				continue;
+			}
+			$offers[]   = $offer;
+			$sent_ids[] = $product_id;
+		}
+		// Incomplete products are removed in case an earlier version sent them.
+		// Removals follow the offers, so result indexes below count offers only.
+		$items = $offers;
+		foreach ( array_keys( $skipped ) as $product_id ) {
+			$items[] = $this->builder->removal( $product_id );
 		}
 
-		$result = empty( $offers ) ? array() : $this->client->send_offers( $offers, $idempotency_key );
+		$result = empty( $items ) ? array() : $this->client->send_offers( $items, $idempotency_key );
 		if ( is_wp_error( $result ) && $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT ) {
 			$delay = $this->retry_delay( $result, (int) $attempt );
 			// Must not be unique: this action is still running, and AS unique = hook+group.
@@ -347,13 +366,23 @@ final class Woo_Sortillus_Lite_Sync {
 		$count              = count( $product_ids );
 		$state['processed'] = (int) $state['processed'] + $count;
 		$state['cursor']    = max( $product_ids );
-		$state['rejected']  = (int) $state['rejected'] + $invalid;
+		$state['rejected']  = (int) $state['rejected'] + $invalid + count( $skipped );
+		$state['skipped']   = (int) ( $state['skipped'] ?? 0 ) + count( $skipped );
+		foreach ( $skipped as $product_id => $missing ) {
+			$this->settings->record_product_issue( $product_id, array( 'reason' => 'incomplete', 'fields' => $missing ) );
+		}
 		if ( is_wp_error( $result ) ) {
 			$state['rejected']   = (int) $state['rejected'] + count( $offers );
 			$state['last_error'] = $result->get_error_message();
 			$state['errors'][]   = $result->get_error_message();
 		} else {
-			$state['accepted'] = (int) $state['accepted'] + count( $offers );
+			$failed            = $this->record_batch_results( $sent_ids, $result );
+			$state['accepted'] = (int) $state['accepted'] + count( $offers ) - $failed;
+			$state['rejected'] = (int) $state['rejected'] + $failed;
+			if ( $failed > 0 ) {
+				$state['last_error'] = __( 'Sortillus did not accept some products. See Products that need attention.', 'woo-sortillus-lite' );
+				$state['errors'][]   = $state['last_error'];
+			}
 		}
 		$state['errors'] = array_slice( array_values( array_unique( $state['errors'] ) ), -10 );
 		$this->settings->set_sync_state( $state );
@@ -387,9 +416,12 @@ final class Woo_Sortillus_Lite_Sync {
 			delete_transient( $lock_key );
 			return;
 		}
+		$missing = $this->builder->missing_fields( $offer );
 
 		$started = gmdate( 'c' );
-		$result  = $this->client->send_offer( $offer, $idempotency_key );
+		// An incomplete product is removed in case it was sent before.
+		$payload = $missing ? $this->builder->removal( $product_id ) : $offer;
+		$result  = $this->client->send_offer( $payload, $idempotency_key );
 		if ( is_wp_error( $result ) && $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT ) {
 			$action_id = as_schedule_single_action(
 				time() + $this->retry_delay( $result, (int) $attempt ),
@@ -403,28 +435,157 @@ final class Woo_Sortillus_Lite_Sync {
 			}
 		}
 
-		$state                  = $this->settings->get_sync_state();
-		$state['last_delta_at'] = gmdate( 'c' );
-		$status                 = is_wp_error( $result ) ? 'failed' : 'succeeded';
-		if ( is_wp_error( $result ) ) {
-			$state['last_delta_error'] = $result->get_error_message();
+		if ( $missing ) {
+			$this->settings->record_product_issue( $product_id, array( 'reason' => 'incomplete', 'fields' => $missing ) );
+			$error = sprintf(
+				/* translators: %s: comma-separated list of missing offer fields */
+				__( 'Not sent to Sortillus. Missing: %s', 'woo-sortillus-lite' ),
+				implode( ', ', $missing )
+			);
 		} else {
-			$state['last_delta_error'] = null;
+			$error = $this->record_offer_result( $product_id, $result );
 		}
-		$this->settings->set_sync_state( $state );
 		delete_transient( $lock_key );
+		$this->finish_delta( $product_id, $idempotency_key, $started, $error );
+	}
+
+	public function queue_removal_on_unpublish( $new_status, $old_status, $post ) {
+		if ( is_object( $post ) && 'product' === ( $post->post_type ?? '' ) && 'publish' === $old_status && 'publish' !== $new_status ) {
+			$this->queue_removal( (int) $post->ID );
+		}
+	}
+
+	// Trashing unpublishes first; this covers deleting a published product outright.
+	public function queue_removal_on_delete( $post_id ) {
+		if ( 'product' === get_post_type( $post_id ) && 'publish' === get_post_status( $post_id ) ) {
+			$this->queue_removal( (int) $post_id );
+		}
+	}
+
+	private function queue_removal( $product_id ) {
+		if ( $product_id <= 0 || ! $this->settings->is_connected() || ! function_exists( 'as_schedule_single_action' ) ) {
+			return;
+		}
+		$action_id = as_schedule_single_action( time() + 5, self::REMOVAL_HOOK, array( $product_id, 0, wp_generate_uuid4() ), self::GROUP, false );
+		if ( ! $action_id || is_wp_error( $action_id ) ) {
+			$state                     = $this->settings->get_sync_state();
+			$state['last_delta_error'] = __( 'Could not schedule the removal of an unpublished product.', 'woo-sortillus-lite' );
+			$this->settings->set_sync_state( $state );
+		}
+	}
+
+	public function run_product_removal( $product_id, $attempt, $idempotency_key ) {
+		$product_id = absint( $product_id );
+		if ( ! $product_id || ! $this->settings->is_connected() ) {
+			return;
+		}
+		// A product published again before this ran keeps its offer.
+		if ( 'publish' === get_post_status( $product_id ) ) {
+			return;
+		}
+		$started = gmdate( 'c' );
+		$result  = $this->client->send_offer( $this->builder->removal( $product_id ), $idempotency_key );
+		if ( is_wp_error( $result ) && $this->retryable( $result ) && (int) $attempt < self::MAX_RETRY_COUNT ) {
+			$action_id = as_schedule_single_action(
+				time() + $this->retry_delay( $result, (int) $attempt ),
+				self::REMOVAL_HOOK,
+				array( $product_id, (int) $attempt + 1, $idempotency_key ),
+				self::GROUP,
+				false
+			);
+			if ( $action_id && ! is_wp_error( $action_id ) ) {
+				return;
+			}
+		}
+		$error = $this->removed( $result ) ? null : $result->get_error_message();
+		if ( null === $error ) {
+			$this->settings->clear_product_issue( $product_id );
+		}
+		$this->finish_delta( $product_id, $idempotency_key, $started, $error );
+	}
+
+	// Sortillus answers offer_not_found when it never had the offer: nothing to remove.
+	private function removed( $result ) {
+		if ( ! is_wp_error( $result ) ) {
+			return true;
+		}
+		$data = $result->get_error_data();
+		return is_array( $data ) && 'offer_not_found' === ( $data['error_code'] ?? null );
+	}
+
+	// Per-offer results of a batch: errors carry the index of the offer.
+	private function record_batch_results( array $product_ids, array $result ) {
+		$errors = array();
+		foreach ( (array) ( $result['errors'] ?? array() ) as $error ) {
+			if ( is_array( $error ) && isset( $error['index'] ) ) {
+				$errors[ (int) $error['index'] ] = $error;
+			}
+		}
+		$failed = 0;
+		foreach ( array_values( $product_ids ) as $index => $product_id ) {
+			if ( isset( $errors[ $index ] ) ) {
+				++$failed;
+				$this->settings->record_product_issue( $product_id, $this->issue_from_response( $errors[ $index ] ) );
+			} else {
+				$this->settings->clear_product_issue( $product_id );
+			}
+		}
+		return $failed;
+	}
+
+	// Returns the delta error to show, or null when Sortillus saved the offer.
+	private function record_offer_result( $product_id, $result ) {
+		if ( is_wp_error( $result ) ) {
+			$data = $result->get_error_data();
+			$this->settings->record_product_issue(
+				$product_id,
+				array(
+					'reason'     => 'rejected',
+					'message'    => $result->get_error_message(),
+					'fields'     => is_array( $data ) ? (array) ( $data['missing_fields'] ?? array() ) : array(),
+					'error_code' => is_array( $data ) ? ( $data['error_code'] ?? null ) : null,
+				)
+			);
+			return $result->get_error_message();
+		}
+		if ( 'needs_review' === ( $result['status'] ?? null ) ) {
+			$issue = $this->issue_from_response( $result );
+			$this->settings->record_product_issue( $product_id, $issue );
+			/* translators: %s: Sortillus review error code */
+			return sprintf( __( 'Held for review by Sortillus: %s', 'woo-sortillus-lite' ), (string) $issue['error_code'] );
+		}
+		$this->settings->clear_product_issue( $product_id );
+		return null;
+	}
+
+	private function issue_from_response( array $response ) {
+		if ( 'needs_review' === ( $response['status'] ?? null ) ) {
+			return array( 'reason' => 'needs_review', 'error_code' => (string) ( $response['error_code'] ?? '' ) );
+		}
+		return array(
+			'reason'  => 'rejected',
+			'message' => is_string( $response['error'] ?? null ) ? $response['error'] : '',
+			'fields'  => (array) ( $response['missing_fields'] ?? array() ),
+		);
+	}
+
+	private function finish_delta( $product_id, $idempotency_key, $started, $error ) {
+		$state                     = $this->settings->get_sync_state();
+		$state['last_delta_at']    = gmdate( 'c' );
+		$state['last_delta_error'] = $error;
+		$this->settings->set_sync_state( $state );
 
 		$this->client->report_sync(
 			array(
 				'kind'             => 'delta',
-				'status'           => $status,
+				'status'           => null === $error ? 'succeeded' : 'failed',
 				'idempotency_key'  => $idempotency_key,
 				'received_count'   => 1,
-				'accepted_count'   => is_wp_error( $result ) ? 0 : 1,
-				'rejected_count'   => is_wp_error( $result ) ? 1 : 0,
+				'accepted_count'   => null === $error ? 1 : 0,
+				'rejected_count'   => null === $error ? 0 : 1,
 				'started_at'       => $started,
 				'finished_at'      => gmdate( 'c' ),
-				'errors'           => is_wp_error( $result ) ? array( $result->get_error_message() ) : array(),
+				'errors'           => null === $error ? array() : array( $error ),
 				'metadata'         => array( 'woocommerce_product_id' => $product_id ),
 			),
 			$idempotency_key

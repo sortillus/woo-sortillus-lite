@@ -11,6 +11,8 @@ See the [installation and setup instructions](installation.md) for requirements,
 - Import all published WooCommerce product parents in background batches.
 - Display store-level import progress and Sortillus connector health.
 - Send a product offer after WooCommerce product creation, update, or stock-status changes.
+- Remove a product's offer from Sortillus when the product is unpublished, trashed, or deleted.
+- Skip products without a name, description, image, price, or product link, and list them, with every product Sortillus rejected or held for review, under **Products That Need Attention**.
 - Automatically send created or updated product categories, including their ancestors, in parent-first order.
 - Optionally load the hosted Sortillus Shop Assistant widget; disabled by default. The plugin places its launcher next to a recognized header product-search form and falls back to a floating button when no search form is available.
 
@@ -18,7 +20,7 @@ The plugin intentionally does not include category deletion sync, automatic tag 
 
 ## Data flow
 
-The connector uses `https://data.sortillus.com` for API requests and loads the shared widget from `https://admin.sortillus.com/shop-assistant/v1/widget.js`. WooCommerce products are represented as Sortillus offers and upserted through the existing `/api/v3/offers` endpoints.
+The connector uses `https://data.sortillus.com` for API requests and loads the shared widget from `https://admin.sortillus.com/shop-assistant/v1/widget.js`. WooCommerce products are represented as Sortillus offers and sent to `/api/v3/offers` with offer contract v2 (`offer_identity_version: 2`). The offer ID is the WooCommerce product ID, as in earlier versions, so Sortillus updates offers sent before. Sortillus must enable offer ingestion for the store before version 1.2 is installed; until then it rejects every offer with HTTP 422.
 
 API requests require HTTPS on `data.sortillus.com`, using the default HTTPS port, and do not follow redirects. Assistant session requests must originate from the configured WordPress home or site URL. Additional hostnames must be configured as the appropriate WordPress URL before using the assistant through them.
 

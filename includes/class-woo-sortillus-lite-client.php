@@ -65,7 +65,8 @@ final class Woo_Sortillus_Lite_Client {
 			'api/v3/offers/batch'
 		);
 		$endpoint       = preg_replace( '#/batch/?$#', '', $batch_endpoint );
-		return $this->request( 'POST', $endpoint, array( 'offer' => $offer ), $idempotency_key, 45 );
+		// Contract v2 reads the offer from the top level of the body.
+		return $this->request( 'POST', $endpoint, $offer, $idempotency_key, 45 );
 	}
 
 	public function send_offers( array $offers, $idempotency_key ) {
@@ -76,10 +77,8 @@ final class Woo_Sortillus_Lite_Client {
 		return $this->request(
 			'POST',
 			$endpoint,
-			array(
-				'offers' => array_values( $offers ),
-				'allow'  => array( 'extract' ),
-			),
+			// Without `allow` the batch is saved at once and reports every offer.
+			array( 'offers' => array_values( $offers ) ),
 			$idempotency_key,
 			90
 		);
@@ -165,6 +164,8 @@ final class Woo_Sortillus_Lite_Client {
 				(string) $message,
 				array(
 					'required_scope' => is_array( $data ) ? ( $data['required_scope'] ?? null ) : null,
+					'missing_fields' => is_array( $data ) ? ( $data['missing_fields'] ?? array() ) : array(),
+					'error_code'     => is_array( $data ) ? ( $data['error_code'] ?? null ) : null,
 					'status'      => $status,
 					'retryable'   => in_array( $status, array( 408, 425, 429 ), true ) || $status >= 500,
 					'retry_after' => $retry_after,

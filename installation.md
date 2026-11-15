@@ -50,7 +50,11 @@ Activating the WordPress plugin and connecting it to Sortillus are separate step
 3. When **Import Products** becomes available, click it.
 4. Follow the progress in **Product Sync Status** and check for any reported errors.
 
-Product import runs in background batches and imports published WooCommerce products. After setup, the plugin sends product offers when products are created or updated, or their stock status changes.
+Product import runs in background batches and imports published WooCommerce products. After setup, the plugin sends product offers when products are created or updated, or their stock status changes, and removes a product's offer when it is unpublished, trashed, or deleted.
+
+Sortillus needs a name, description, image, price, and product link for every product. Products without one are not sent. They appear under **Products That Need Attention** with what to add, together with any product Sortillus rejected or held for review. Fix the product in WooCommerce and save it to send it again.
+
+**Upgrading from 1.1:** ask Sortillus to enable offer ingestion for your store first, then install 1.2 and click **Import Products** once.
 
 After the initial import, new and edited product categories are sent automatically in the background. Run **Import Categories** again if you need to rebuild the full category catalog.
 
@@ -70,6 +74,8 @@ The shopping assistant is disabled by default.
 - **The activation token has expired or was already used:** Generate a new token in Sortillus and try again.
 - **Import Products is missing:** Complete **Import Categories** first. If category import reports an error, resolve it and retry.
 - **An existing connection asks you to reconnect for category import:** Generate a new activation token, paste it into **Reconnect with a new activation token**, and click **Reconnect**. Then run **Import Categories**.
+- **A product is listed under Products That Need Attention:** add what the list names (for example a product image or description) and save the product. Products held for review need Sortillus to act; contact Sortillus.
+- **Every product is rejected with an offer ingestion error:** Sortillus has not enabled offer ingestion for your store yet. Contact Sortillus.
 - **Connection requests fail:** Check the error shown on the plugin page. Your server must allow outgoing HTTPS requests to `data.sortillus.com`.
 - **The assistant button is missing:** Check that the connection status is **Connected** and that you selected the assistant checkbox and clicked **Save**.
 
