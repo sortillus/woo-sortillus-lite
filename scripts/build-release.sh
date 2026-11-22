@@ -40,6 +40,7 @@ mkdir -p "$stage"
 rsync -a \
 	--exclude '.git/' \
 	--exclude '.github/' \
+	--exclude 'AGENTS.md' \
 	--exclude 'dist/' \
 	--exclude 'scripts/' \
 	--exclude 'tests/' \
